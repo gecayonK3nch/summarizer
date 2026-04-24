@@ -49,6 +49,7 @@ Environment variables:
 ## Notes
 
 - Message history is stored in memory only. Restarting the process clears recent chat context.
+- While a command is being processed, the bot shows Telegram's "typing" status until it sends the response.
 - The LLM client is intentionally OpenAI-compatible so you can point it at OpenAI or another compatible provider.
 - If the primary model returns 404 or provider errors, the bot automatically tries `OPENAI_FALLBACK_MODELS`.
 - If you want different free models, override `OPENAI_BASE_URL`, `OPENAI_MODEL`, and `OPENAI_FALLBACK_MODELS` in `.env`.
