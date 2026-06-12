@@ -34,13 +34,18 @@ async def _perform_web_search(query: str) -> str:
 
     return await asyncio.to_thread(sync_search)
 
-async def _send_long_message(message: Message, text: str) -> None:
+async def _send_long_message(message: Message, text: str, parse_mode: str | None = None) -> None:
     """Helper to send potentially long messages by splitting them into chunks."""
     max_chunk_size = 4000
     if not text:
         return
     for i in range(0, len(text), max_chunk_size):
-        await message.answer(text[i:i + max_chunk_size])
+        chunk = text[i:i + max_chunk_size]
+        try:
+            await message.answer(chunk, parse_mode=parse_mode)
+        except Exception:
+            # Fallback if parsing fails (e.g. unclosed HTML tags)
+            await message.answer(chunk)
 
 def build_router(store: MessageStore, summarizer: Summarizer, settings: Settings) -> Router:
     local_router = Router()
@@ -133,7 +138,7 @@ def build_router(store: MessageStore, summarizer: Summarizer, settings: Settings
                     history=history_text,
                     search_results=search_results
                 )
-                await _send_long_message(message, answer)
+                await _send_long_message(message, answer, parse_mode="HTML")
             except LLMUnavailableError:
                 await message.answer("AI models are currently unavailable. Please try again later.")
             except Exception:

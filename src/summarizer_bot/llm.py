@@ -112,12 +112,18 @@ class LLMClient:
         self, prompt: str, history: str | None = None, search_results: str | None = None
     ) -> str:
         """Answers the user's question using optional context."""
-        system_content = "You are a helpful and intelligent Telegram bot."
+        system_content = (
+            "You are a helpful and intelligent Telegram bot. "
+            "IMPORTANT: Answer clearly, directly, and concisely. DO NOT output long, verbose, or exhaustive encyclopedic text. "
+            "Avoid information noise; provide only the essential facts. "
+            "Format your answer using ONLY Telegram-supported HTML tags (<b>bold</b>, <i>italic</i>, <code>code</code>, a href). "
+            "DO NOT use Markdown asterisks or underscores, DO NOT use markdown tables or markdown headers. "
+            "If you use search results, briefly list the sources at the bottom."
+        )
         if history:
             system_content += f"\n\nRecent chat history for context:\n{history}\n"
         if search_results:
             system_content += f"\n\nSearch results from the web to help answer the question:\n{search_results}\n"
-            system_content += "\nAnswer the question concisely based on the required context."
 
         last_error: Exception | None = None
         for index, model in enumerate(self._models):
