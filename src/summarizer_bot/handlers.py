@@ -34,6 +34,13 @@ async def _perform_web_search(query: str) -> str:
 
     return await asyncio.to_thread(sync_search)
 
+async def _send_long_message(message: Message, text: str) -> None:
+    """Helper to send potentially long messages by splitting them into chunks."""
+    max_chunk_size = 4000
+    if not text:
+        return
+    for i in range(0, len(text), max_chunk_size):
+        await message.answer(text[i:i + max_chunk_size])
 
 def build_router(store: MessageStore, summarizer: Summarizer, settings: Settings) -> Router:
     local_router = Router()
@@ -90,7 +97,7 @@ def build_router(store: MessageStore, summarizer: Summarizer, settings: Settings
                 await message.answer("Could not generate summary due to provider error.")
                 return
 
-            await message.answer(summary)
+            await _send_long_message(message, summary)
 
     @local_router.message(Command("ask"))
     @local_router.message(F.text.startswith("!ask "))
@@ -126,7 +133,7 @@ def build_router(store: MessageStore, summarizer: Summarizer, settings: Settings
                     history=history_text,
                     search_results=search_results
                 )
-                await message.answer(answer)
+                await _send_long_message(message, answer)
             except LLMUnavailableError:
                 await message.answer("AI models are currently unavailable. Please try again later.")
             except Exception:
