@@ -30,3 +30,9 @@ class Summarizer:
     async def summarize_messages(self, messages: list[ChatMessage], temperature: float = 0.2) -> str:
         prompt = self.build_prompt(messages)
         return await self._llm_client.summarize(prompt, temperature=temperature)
+
+    async def analyze_query(self, prompt: str) -> dict[str, str | bool]:
+        return await self._llm_client.analyze_query(prompt)
+
+    async def answer_question(self, prompt: str, history: str | None = None, search_results: str | None = None) -> str:
+        return await self._llm_client.answer_question(prompt, history=history, search_results=search_results)

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.utils.chat_action import ChatActionSender
+from ddgs import DDGS
 
 from .models import ChatMessage
 from .storage import MessageStore
@@ -16,6 +18,22 @@ from .llm import LLMUnavailableError
 router = Router()
 logger = logging.getLogger(__name__)
 
+async def _perform_web_search(query: str) -> str:
+    def sync_search() -> str:
+        try:
+            results = list(DDGS().text(query, max_results=3))
+            if not results:
+                return "No useful search results found."
+            chunks = []
+            for r in results:
+                chunks.append(f"Title: {r.get('title')}\nSnippet: {r.get('body')}")
+            return "\n\n".join(chunks)
+        except Exception as e:
+            logger.error("DuckDuckGo search error: %s", e)
+            return "Search failed."
+
+    return await asyncio.to_thread(sync_search)
+
 
 def build_router(store: MessageStore, summarizer: Summarizer, settings: Settings) -> Router:
     local_router = Router()
@@ -24,14 +42,16 @@ def build_router(store: MessageStore, summarizer: Summarizer, settings: Settings
     async def start_handler(message: Message) -> None:
         async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
             await message.answer(
-                "Send messages in the chat, then use /summary N to summarize the last N messages."
+                "Send messages in the chat, then use /summary N to summarize the last N messages.\n"
+                "Use /ask <question> or !ask <question> to ask me anything."
             )
 
     @local_router.message(Command("help"))
     async def help_handler(message: Message) -> None:
         async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
             await message.answer(
-                f"Use /summary N, where N is between 1 and {settings.summary_max_messages}."
+                f"Use /summary N, where N is between 1 and {settings.summary_max_messages}.\n"
+                "Use /ask <question> or !ask <question> to ask a question with optional internet search."
             )
 
     @local_router.message(Command("summary"))
@@ -71,6 +91,47 @@ def build_router(store: MessageStore, summarizer: Summarizer, settings: Settings
                 return
 
             await message.answer(summary)
+
+    @local_router.message(Command("ask"))
+    @local_router.message(F.text.startswith("!ask "))
+    async def ask_handler(message: Message) -> None:
+        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+            if message.text.startswith("!ask "):
+                question = message.text[5:].strip()
+            else:
+                parts = (message.text or "").split(maxsplit=1)
+                question = parts[1].strip() if len(parts) > 1 else ""
+
+            if not question:
+                await message.answer("Please provide a question after the command.")
+                return
+
+            try:
+                # 1. Analyze the query to see what context is needed
+                analysis = await summarizer.analyze_query(question)
+                
+                history_text = None
+                if analysis.get("need_history"):
+                    recent_msgs = store.get_recent_messages(message.chat.id, settings.summary_max_messages)
+                    if recent_msgs:
+                        history_text = "\n".join(f"{m.author}: {m.text}" for m in recent_msgs)
+                
+                search_results = None
+                if analysis.get("need_search") and analysis.get("search_query"):
+                    search_results = await _perform_web_search(analysis["search_query"])
+                
+                # 2. Get the final answer
+                answer = await summarizer.answer_question(
+                    prompt=question,
+                    history=history_text,
+                    search_results=search_results
+                )
+                await message.answer(answer)
+            except LLMUnavailableError:
+                await message.answer("AI models are currently unavailable. Please try again later.")
+            except Exception:
+                logger.exception("Ask request failed for chat %s", message.chat.id)
+                await message.answer("I had trouble processing that question.")
 
     @local_router.message(F.text & ~F.text.startswith("/"))
     async def store_message(message: Message) -> None:

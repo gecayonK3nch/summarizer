@@ -10,6 +10,7 @@ The default model is a strong free OpenRouter-compatible option: `openai/gpt-oss
 - Stores recent messages in memory per chat.
 - Summarizes the last N messages with an OpenAI-compatible model.
 - Exposes a simple `/summary N` command.
+- Can answer arbitrary questions via `/ask`, automatically deciding whether to provide chat context or to search the internet (via DuckDuckGo) for real-time information.
 
 ## Quick start
 
@@ -32,6 +33,7 @@ python -m summarizer_bot.main
 - `/start` - short intro
 - `/help` - usage notes
 - `/summary 10` - summarize the last 10 stored text messages
+- `/ask <question>` or `!ask <question>` - Ask the bot any question. The bot will automatically analyze if it needs to search the internet (using DuckDuckGo) or refer to the recent chat history to answer your question.
 
 ## Configuration
 

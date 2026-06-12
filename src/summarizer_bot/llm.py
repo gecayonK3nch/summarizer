@@ -55,3 +55,86 @@ class LLMClient:
                 logger.warning("Model '%s' failed with provider error; trying next fallback", model)
 
         raise LLMUnavailableError("No available models could generate a summary") from last_error
+
+    async def analyze_query(self, prompt: str) -> dict[str, str | bool]:
+        """Analyzes a question to determine if search or history is needed."""
+        system_prompt = (
+            "You are an AI assistant orchestrator. Your job is to decide if a user's question "
+            "needs an internet search to get up-to-date or factual info, or if it needs recent chat history context.\n"
+            "Reply strictly with these three lines:\n"
+            "SEARCH: [Yes/No]\n"
+            "SEARCH_QUERY: [query if Yes, else None]\n"
+            "HISTORY: [Yes/No]\n\n"
+            "Examples:\n"
+            "User: What is the weather in Sevastopol today?\n"
+            "SEARCH: Yes\n"
+            "SEARCH_QUERY: current weather in Sevastopol\n"
+            "HISTORY: No\n\n"
+            "User: Write a bedtime story.\n"
+            "SEARCH: No\n"
+            "SEARCH_QUERY: None\n"
+            "HISTORY: No\n\n"
+            "User: What were we just talking about?\n"
+            "SEARCH: No\n"
+            "SEARCH_QUERY: None\n"
+            "HISTORY: Yes"
+        )
+        for index, model in enumerate(self._models):
+            try:
+                response = await self._client.chat.completions.create(
+                    model=model,
+                    temperature=0.1,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
+                )
+                content = (response.choices[0].message.content or "").strip()
+                result = {"need_search": False, "search_query": None, "need_history": False}
+                for line in content.splitlines():
+                    line = line.strip()
+                    if line.startswith("SEARCH:"):
+                        result["need_search"] = "yes" in line.upper()
+                    elif line.startswith("SEARCH_QUERY:"):
+                        idx = line.find(":") + 1
+                        q = line[idx:].strip()
+                        if q.lower() != "none" and result["need_search"]:
+                            result["search_query"] = q
+                    elif line.startswith("HISTORY:"):
+                        result["need_history"] = "yes" in line.upper()
+                return result
+            except (APIConnectionError, RateLimitError, APIError, NotFoundError):
+                continue
+        # Default fallback
+        return {"need_search": False, "search_query": None, "need_history": False}
+
+    async def answer_question(
+        self, prompt: str, history: str | None = None, search_results: str | None = None
+    ) -> str:
+        """Answers the user's question using optional context."""
+        system_content = "You are a helpful and intelligent Telegram bot."
+        if history:
+            system_content += f"\n\nRecent chat history for context:\n{history}\n"
+        if search_results:
+            system_content += f"\n\nSearch results from the web to help answer the question:\n{search_results}\n"
+            system_content += "\nAnswer the question concisely based on the required context."
+
+        last_error: Exception | None = None
+        for index, model in enumerate(self._models):
+            try:
+                response = await self._client.chat.completions.create(
+                    model=model,
+                    temperature=0.6,
+                    messages=[
+                        {"role": "system", "content": system_content},
+                        {"role": "user", "content": prompt},
+                    ],
+                )
+                content = (response.choices[0].message.content or "").strip()
+                if content:
+                    return content
+                last_error = RuntimeError(f"Model '{model}' returned empty content")
+            except Exception as e:
+                last_error = e
+                continue
+        raise LLMUnavailableError("No available models could answer the question") from last_error
