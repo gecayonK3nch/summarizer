@@ -11,6 +11,8 @@ requires-python = ">=3.11"
 dependencies = [
   "aiogram>=3.4,<4.0",
   "ddgs>=9.0",
+  "matplotlib>=3.6",
+  "pygments>=2.15",
   "openai>=1.40.0",
   "pydantic>=2.7",
   "pydantic-settings>=2.3",
