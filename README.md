@@ -48,6 +48,14 @@ Environment variables:
 - `SUMMARY_MAX_CHARS` - maximum total character budget for the prompt context
 - `SUMMARY_TEMPERATURE` - generation temperature for the summary
 
+## Rich formatting
+
+Answers and summaries are post-processed before being sent to Telegram:
+
+- Code fences (```` ```lang ... ``` ````) are converted to Telegram `<pre><code>` blocks with a language tag, so code renders correctly instead of as raw text.
+- Display math (`$$...$$` or `\[...\]`) is rendered to a PNG image via matplotlib and sent as a photo.
+- Inline math (`$...$` or `\(...\)`) is converted to a readable Unicode approximation (e.g. `∫`, `‖r′(t)‖`, subscripts/superscripts).
+
 ## Notes
 
 - Message history is stored in memory only. Restarting the process clears recent chat context.
