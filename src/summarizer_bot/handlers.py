@@ -220,8 +220,8 @@ async def _send_long_message(message: Message, text: str, parse_mode: str | None
         try:
             await message.reply(chunk, parse_mode=parse_mode)
         except Exception:
-            # Fallback if parsing fails (e.g. unclosed HTML tags)
-            await message.reply(chunk)
+            # Fallback if parsing fails (e.g. unsupported HTML tags or broken markup).
+            await message.reply(chunk, parse_mode=None)
 
 def build_router(store: MessageStore, summarizer: Summarizer, settings: Settings) -> Router:
     local_router = Router()
