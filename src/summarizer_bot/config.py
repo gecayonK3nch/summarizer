@@ -6,8 +6,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 DEFAULT_FALLBACK_MODELS = [
     "qwen/qwen3-next-80b-a3b-instruct:free",
     "meta-llama/llama-3.3-70b-instruct:free",
-    "google/gemma-3-27b-it:free",
-    "openrouter/free",
 ]
 DEFAULT_FALLBACK_MODELS_CSV = ",".join(DEFAULT_FALLBACK_MODELS)
 

@@ -8,7 +8,7 @@ import html
 
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, InputFile
 from aiogram.utils.chat_action import ChatActionSender
 from ddgs import DDGS
 
@@ -73,7 +73,8 @@ def _render_latex_to_png_bytes(latex: str) -> io.BytesIO:
 async def _send_image_bytes(message: Message, image_buf: io.BytesIO, caption: str | None = None) -> None:
     image_buf.seek(0)
     # send as a reply-photo to the triggering message
-    await message.reply_photo(photo=image_buf, caption=caption)
+    # Pass the BytesIO directly to InputFile without duplicate filename kwarg.
+    await message.reply_photo(photo=InputFile(image_buf), caption=caption)
 
 
 # --- Inline LaTeX -> readable Unicode -------------------------------------
@@ -283,10 +284,11 @@ def build_router(store: MessageStore, summarizer: Summarizer, settings: Settings
     @local_router.message(F.text.startswith("!ask "))
     async def ask_handler(message: Message) -> None:
         async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
-            if message.text.startswith("!ask "):
-                question = message.text[5:].strip()
+            text = message.text or ""
+            if text.startswith("!ask "):
+                question = text[5:].strip()
             else:
-                parts = (message.text or "").split(maxsplit=1)
+                parts = text.split(maxsplit=1)
                 question = parts[1].strip() if len(parts) > 1 else ""
 
             if not question:
@@ -304,8 +306,9 @@ def build_router(store: MessageStore, summarizer: Summarizer, settings: Settings
                         history_text = "\n".join(f"{m.author}: {m.text}" for m in recent_msgs)
                 
                 search_results = None
-                if analysis.get("need_search") and analysis.get("search_query"):
-                    search_results = await _perform_web_search(analysis["search_query"])
+                search_query = analysis.get("search_query")
+                if analysis.get("need_search") and isinstance(search_query, str):
+                    search_results = await _perform_web_search(search_query)
                 
                 # 2. Get the final answer
                 answer = await summarizer.answer_question(

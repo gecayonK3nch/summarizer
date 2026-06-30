@@ -1,10 +1,51 @@
 from __future__ import annotations
 
+import re
 import logging
+from typing import TypedDict
 
 from openai import APIConnectionError, APIError, AsyncOpenAI, NotFoundError, RateLimitError
 
 logger = logging.getLogger(__name__)
+
+
+class QueryAnalysis(TypedDict):
+    need_search: bool
+    search_query: str | None
+    need_history: bool
+
+_HISTORY_PATTERNS = (
+    re.compile(
+        r"\b(что мы|что я|что ты|что там|о чем мы|о чём мы|о чем говорили|о чём говорили|"
+        r"напомни|вспомни|ранее|выше|ниже|как там|что было|что говорили|помнишь|"
+        r"продолжим|на чем остановились|на чём остановились|в прошлый раз|по этому поводу)\b",
+        re.IGNORECASE,
+    ),
+)
+
+_SEARCH_PATTERNS = (
+    re.compile(
+        r"\b(сейчас|сегодня|сегодняшн\w*|текущ\w*|актуаль\w*|последн\w*|"
+        r"обновлен\w*|новост\w*|курс\w*|цена\w*|стоимост\w*|погода|прогноз|"
+        r"релиз\w*|верси\w*|доступн\w*|работает ли|кто сейчас|сколько стоит|"
+        r"что нового|изменилось ли|проверь|посмотри|найди|поиск|интернет|в сети|в интернете|web|online)\b",
+        re.IGNORECASE,
+    ),
+)
+
+
+def _classify_query(prompt: str) -> QueryAnalysis:
+    text = prompt.strip()
+    lowered = text.casefold()
+
+    need_history = any(pattern.search(lowered) for pattern in _HISTORY_PATTERNS)
+    need_search = any(pattern.search(lowered) for pattern in _SEARCH_PATTERNS)
+
+    return {
+        "need_search": need_search,
+        "search_query": text if need_search else None,
+        "need_history": need_history,
+    }
 
 
 class LLMUnavailableError(RuntimeError):
@@ -23,7 +64,7 @@ class LLMClient:
         self._models = list(dict.fromkeys(item.strip() for item in candidate_models if item.strip()))
         if not self._models:
             raise ValueError("At least one model must be configured")
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0, timeout=30.0)
 
     async def summarize(self, prompt: str, temperature: float = 0.2) -> str:
         last_error: Exception | None = None
@@ -56,57 +97,9 @@ class LLMClient:
 
         raise LLMUnavailableError("No available models could generate a summary") from last_error
 
-    async def analyze_query(self, prompt: str) -> dict[str, str | bool]:
-        """Analyzes a question to determine if search or history is needed."""
-        system_prompt = (
-            "You are an AI assistant orchestrator. Your job is to decide if a user's question "
-            "needs an internet search to get up-to-date or factual info, or if it needs recent chat history context.\n"
-            "Reply strictly with these three lines:\n"
-            "SEARCH: [Yes/No]\n"
-            "SEARCH_QUERY: [query if Yes, else None]\n"
-            "HISTORY: [Yes/No]\n\n"
-            "Examples:\n"
-            "User: What is the weather in Sevastopol today?\n"
-            "SEARCH: Yes\n"
-            "SEARCH_QUERY: current weather in Sevastopol\n"
-            "HISTORY: No\n\n"
-            "User: Write a bedtime story.\n"
-            "SEARCH: No\n"
-            "SEARCH_QUERY: None\n"
-            "HISTORY: No\n\n"
-            "User: What were we just talking about?\n"
-            "SEARCH: No\n"
-            "SEARCH_QUERY: None\n"
-            "HISTORY: Yes"
-        )
-        for index, model in enumerate(self._models):
-            try:
-                response = await self._client.chat.completions.create(
-                    model=model,
-                    temperature=0.1,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                )
-                content = (response.choices[0].message.content or "").strip()
-                result = {"need_search": False, "search_query": None, "need_history": False}
-                for line in content.splitlines():
-                    line = line.strip()
-                    if line.startswith("SEARCH:"):
-                        result["need_search"] = "yes" in line.upper()
-                    elif line.startswith("SEARCH_QUERY:"):
-                        idx = line.find(":") + 1
-                        q = line[idx:].strip()
-                        if q.lower() != "none" and result["need_search"]:
-                            result["search_query"] = q
-                    elif line.startswith("HISTORY:"):
-                        result["need_history"] = "yes" in line.upper()
-                return result
-            except (APIConnectionError, RateLimitError, APIError, NotFoundError):
-                continue
-        # Default fallback
-        return {"need_search": False, "search_query": None, "need_history": False}
+    async def analyze_query(self, prompt: str) -> QueryAnalysis:
+        """Classify a question locally to avoid a second LLM round-trip."""
+        return _classify_query(prompt)
 
     async def answer_question(
         self, prompt: str, history: str | None = None, search_results: str | None = None

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .models import ChatMessage
-from .llm import LLMClient
+from .llm import LLMClient, QueryAnalysis
 
 
 class Summarizer:
@@ -31,7 +31,7 @@ class Summarizer:
         prompt = self.build_prompt(messages)
         return await self._llm_client.summarize(prompt, temperature=temperature)
 
-    async def analyze_query(self, prompt: str) -> dict[str, str | bool]:
+    async def analyze_query(self, prompt: str) -> QueryAnalysis:
         return await self._llm_client.analyze_query(prompt)
 
     async def answer_question(self, prompt: str, history: str | None = None, search_results: str | None = None) -> str:
