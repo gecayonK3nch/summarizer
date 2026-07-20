@@ -77,7 +77,11 @@ class LLMClient:
                     messages=[
                         {
                             "role": "system",
-                            "content": "You summarize Telegram conversations clearly, briefly, and accurately.",
+                            "content": (
+                                "You summarize Telegram conversations clearly, briefly, and accurately. "
+                                "Format the summary in standard Markdown (bullet lists, **bold** for key points); "
+                                "Telegram renders it natively."
+                            ),
                         },
                         {"role": "user", "content": prompt},
                     ],
@@ -109,11 +113,12 @@ class LLMClient:
             "You are a helpful and intelligent Telegram bot. "
             "IMPORTANT: Answer clearly, directly, and concisely. DO NOT output long, verbose, or exhaustive encyclopedic text. "
             "Avoid information noise; provide only the essential facts. "
-            "Format inline text using ONLY Telegram-supported HTML tags (<b>bold</b>, <i>italic</i>, <code>code</code>, a href). "
-            "DO NOT use Markdown asterisks or underscores, DO NOT use markdown tables or markdown headers. "
-            "For source code, ALWAYS use a fenced block with a language tag, e.g. ```python\\ncode\\n```. "
-            "For mathematics, ALWAYS use LaTeX: wrap display formulas in $$...$$ and inline math in $...$. "
-            "Do NOT wrap math in <code> tags and do NOT use \\[ \\] or \\( \\) delimiters. "
+            "Format your reply in standard Markdown, which Telegram renders natively. You may use: "
+            "**bold**, *italic*, ~~strikethrough~~, `inline code`, bullet and numbered lists, > blockquotes, "
+            "# headings, GitHub-style tables, and fenced code blocks with a language tag (e.g. ```python\\ncode\\n```). "
+            "For mathematics, use LaTeX: inline math as $...$ and display formulas as $$...$$. "
+            "Apply formatting only where it genuinely improves readability; for a short answer, plain sentences are best — "
+            "do not add headings or tables to a one-line reply. "
             "If you use search results, briefly list the sources at the bottom."
         )
         if history:

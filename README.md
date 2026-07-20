@@ -50,11 +50,20 @@ Environment variables:
 
 ## Rich formatting
 
-Answers and summaries are post-processed before being sent to Telegram:
+Answers and summaries are sent as Telegram **rich messages** (Bot API 10.1+), so the
+model's Markdown is preserved and rendered natively — no lossy post-processing:
 
-- Code fences (```` ```lang ... ``` ````) are converted to Telegram `<pre><code>` blocks with a language tag, so code renders correctly instead of as raw text.
-- Display math (`$$...$$` or `\[...\]`) is rendered to a PNG image via matplotlib and sent as a photo.
-- Inline math (`$...$` or `\(...\)`) is converted to a readable Unicode approximation (e.g. `∫`, `‖r′(t)‖`, subscripts/superscripts).
+- Headings, **bold**/*italic*/~~strikethrough~~, bullet/numbered/task lists, and `> blockquotes`.
+- GitHub-style tables (`| col | col |`).
+- Fenced code blocks with language highlighting (```` ```python … ``` ````).
+- LaTeX math: inline `$...$` and display `$$...$$`, rendered by the Telegram client itself.
+
+The raw model output goes straight into `InputRichMessage(markdown=...)` via
+`sendRichMessage`. A single rich message holds up to 32768 characters. If a rich send
+ever fails (malformed markup or an oversized payload), the bot falls back to a plain-text reply.
+
+Requires `aiogram>=3.30` (Bot API 10.2). The older matplotlib PNG / Unicode-math
+pipeline was removed, since the Telegram client now renders math and code directly.
 
 ## Notes
 
