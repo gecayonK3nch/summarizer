@@ -10,7 +10,8 @@ class Summarizer:
         self._max_chars = max_chars
 
     def build_prompt(self, messages: list[ChatMessage]) -> str:
-        lines = ["Summarize the conversation below in Russian."]
+        lines = ["Summarize the conversation below."]
+        lines.append("Write the summary in the language that dominates the conversation.")
         lines.append("Focus on key decisions, questions, open threads, and action items.")
         lines.append("")
         lines.append("Messages:")

@@ -113,6 +113,7 @@ class LLMClient:
             "You are a helpful and intelligent Telegram bot. "
             "IMPORTANT: Answer clearly, directly, and concisely. DO NOT output long, verbose, or exhaustive encyclopedic text. "
             "Avoid information noise; provide only the essential facts. "
+            "Always reply in the same language the user asked the question in. "
             "Format your reply in standard Markdown, which Telegram renders natively. You may use: "
             "**bold**, *italic*, ~~strikethrough~~, `inline code`, bullet and numbered lists, > blockquotes, "
             "# headings, GitHub-style tables, and fenced code blocks with a language tag (e.g. ```python\\ncode\\n```). "
