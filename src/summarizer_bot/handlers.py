@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -21,6 +22,36 @@ logger = logging.getLogger(__name__)
 # Rich messages accept up to 32768 UTF-8 characters (Bot API 10.1+). Guard
 # against pathological over-long model output before attempting a rich send.
 RICH_MESSAGE_LIMIT = 32_768
+
+# Telegram rich Markdown recognizes math only as $...$ / $$...$$ (and ```math```).
+# LLMs frequently emit the \(...\) and \[...\] delimiters instead, which Telegram
+# then shows as raw text. Rewrite them to the dollar form before sending.
+# Split on code spans first so we never touch backslashes inside real code
+# (e.g. a Python regex like r"\(").
+_CODE_SPAN_RE = re.compile(r"```.*?```|`[^`\n]*`", re.DOTALL)
+_DISPLAY_MATH_DELIM_RE = re.compile(r"\\\[(.+?)\\\]", re.DOTALL)
+_INLINE_MATH_DELIM_RE = re.compile(r"\\\((.+?)\\\)", re.DOTALL)
+
+
+def _normalize_math_delimiters(text: str) -> str:
+    """Convert ``\\[...\\]`` -> ``$$...$$`` and ``\\(...\\)`` -> ``$...$``.
+
+    Only applied outside fenced/inline code, so code containing escaped parens or
+    brackets is left untouched.
+    """
+    def convert(segment: str) -> str:
+        segment = _DISPLAY_MATH_DELIM_RE.sub(lambda m: f"$${m.group(1)}$$", segment)
+        segment = _INLINE_MATH_DELIM_RE.sub(lambda m: f"${m.group(1)}$", segment)
+        return segment
+
+    out: list[str] = []
+    last = 0
+    for match in _CODE_SPAN_RE.finditer(text):
+        out.append(convert(text[last:match.start()]))
+        out.append(match.group(0))  # code span kept verbatim
+        last = match.end()
+    out.append(convert(text[last:]))
+    return "".join(out)
 
 
 async def _perform_web_search(query: str) -> str:
@@ -50,7 +81,7 @@ async def _send_rich(message: Message, markdown: str) -> None:
     oversized payload), fall back to a plain-text reply so the user still gets an
     answer.
     """
-    text = (markdown or "").strip()
+    text = _normalize_math_delimiters((markdown or "").strip())
     if not text:
         return
 
