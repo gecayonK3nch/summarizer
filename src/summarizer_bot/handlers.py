@@ -4,24 +4,28 @@ import asyncio
 import logging
 import re
 
-from aiogram import Router, F
-from aiogram.filters import Command
+from aiogram import F, Router
+from aiogram.filters import Command, CommandObject
 from aiogram.types import InputRichMessage, Message
 from aiogram.utils.chat_action import ChatActionSender
 from ddgs import DDGS
 
+from .config import Settings
+from .llm import LLMUnavailableError
 from .models import ChatMessage
 from .storage import MessageStore
 from .summarizer import Summarizer
-from .config import Settings
-from .llm import LLMUnavailableError
 
-router = Router()
 logger = logging.getLogger(__name__)
 
 # Rich messages accept up to 32768 UTF-8 characters (Bot API 10.1+). Guard
 # against pathological over-long model output before attempting a rich send.
 RICH_MESSAGE_LIMIT = 32_768
+
+# Plain-text messages are capped at 4096 characters; keep some headroom.
+PLAIN_CHUNK_SIZE = 4000
+
+DEFAULT_SUMMARY_SIZE = 10
 
 # Telegram rich Markdown recognizes math only as $...$ / $$...$$ (and ```math```).
 # LLMs frequently emit the \(...\) and \[...\] delimiters instead, which Telegram
@@ -58,15 +62,14 @@ async def _perform_web_search(query: str) -> str:
     def sync_search() -> str:
         try:
             results = list(DDGS().text(query, max_results=3))
-            if not results:
-                return "No useful search results found."
-            chunks = []
-            for r in results:
-                chunks.append(f"Title: {r.get('title')}\nSnippet: {r.get('body')}")
-            return "\n\n".join(chunks)
-        except Exception as e:
-            logger.error("DuckDuckGo search error: %s", e)
+        except Exception:
+            logger.exception("DuckDuckGo search failed for query %r", query)
             return "Search failed."
+        if not results:
+            return "No useful search results found."
+        return "\n\n".join(
+            f"Title: {r.get('title')}\nSnippet: {r.get('body')}" for r in results
+        )
 
     return await asyncio.to_thread(sync_search)
 
@@ -92,64 +95,54 @@ async def _send_rich(message: Message, markdown: str) -> None:
         except Exception:
             logger.exception("Rich message send failed; falling back to plain text")
 
-    await _send_long_message(message, text, parse_mode=None)
+    await _send_plain(message, text)
 
 
-async def _send_long_message(message: Message, text: str, parse_mode: str | None = None) -> None:
-    """Fallback sender: split long text into plain chunks under Telegram's limit."""
-    max_chunk_size = 4000
-    if not text:
-        return
-    for i in range(0, len(text), max_chunk_size):
-        chunk = text[i:i + max_chunk_size]
-        try:
-            await message.reply(chunk, parse_mode=parse_mode)
-        except Exception:
-            # Last resort if even the chunk fails to parse.
-            await message.reply(chunk, parse_mode=None)
+async def _send_plain(message: Message, text: str) -> None:
+    """Fallback sender: split long text into plain-text chunks under Telegram's limit."""
+    for i in range(0, len(text), PLAIN_CHUNK_SIZE):
+        await message.reply(text[i:i + PLAIN_CHUNK_SIZE], parse_mode=None)
 
 
 def build_router(store: MessageStore, summarizer: Summarizer, settings: Settings) -> Router:
-    local_router = Router()
+    router = Router()
 
-    @local_router.message(Command("start"))
+    @router.message(Command("start"))
     async def start_handler(message: Message) -> None:
-        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
-                await message.reply(
-                    "Send messages in the chat, then use /summary N to summarize the last N messages.\n"
-                    "Use /ask <question> or !ask <question> to ask me anything."
-                )
+        await message.reply(
+            "Send messages in the chat, then use /summary N to summarize the last N messages.\n"
+            "Use /ask <question> or !ask <question> to ask me anything."
+        )
 
-    @local_router.message(Command("help"))
+    @router.message(Command("help"))
     async def help_handler(message: Message) -> None:
-        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
-                await message.reply(
-                    f"Use /summary N, where N is between 1 and {settings.summary_max_messages}.\n"
-                    "Use /ask <question> or !ask <question> to ask a question with optional internet search."
-                )
+        await message.reply(
+            f"Use /summary N, where N is between 1 and {settings.summary_max_messages} "
+            f"(default {DEFAULT_SUMMARY_SIZE}).\n"
+            "Use /ask <question> or !ask <question> to ask a question with optional internet search."
+        )
 
-    @local_router.message(Command("summary"))
-    async def summary_handler(message: Message) -> None:
-        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
-            parts = (message.text or "").split(maxsplit=1)
-            requested = 10
-            if len(parts) > 1:
-                try:
-                    requested = int(parts[1])
-                except ValueError:
-                    await message.reply("Use /summary N with a positive integer.")
-                    return
-
-            if requested < 1:
-                await message.reply("N must be at least 1.")
+    @router.message(Command("summary"))
+    async def summary_handler(message: Message, command: CommandObject) -> None:
+        requested = DEFAULT_SUMMARY_SIZE
+        if command.args:
+            try:
+                requested = int(command.args)
+            except ValueError:
+                await message.reply("Use /summary N with a positive integer.")
                 return
 
-            requested = min(requested, settings.summary_max_messages)
-            recent_messages = store.get_recent_messages(message.chat.id, requested)
-            if not recent_messages:
-                await message.reply("I do not have enough stored messages yet.")
-                return
+        if requested < 1:
+            await message.reply("N must be at least 1.")
+            return
 
+        requested = min(requested, settings.summary_max_messages)
+        recent_messages = store.get_recent_messages(message.chat.id, requested)
+        if not recent_messages:
+            await message.reply("I do not have enough stored messages yet.")
+            return
+
+        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
             try:
                 summary = await summarizer.summarize_messages(
                     recent_messages, temperature=settings.summary_temperature
@@ -166,41 +159,39 @@ def build_router(store: MessageStore, summarizer: Summarizer, settings: Settings
 
             await _send_rich(message, summary)
 
-    @local_router.message(Command("ask"))
-    @local_router.message(F.text.startswith("!ask "))
-    async def ask_handler(message: Message) -> None:
+    @router.message(Command("ask"))
+    @router.message(F.text.startswith("!ask "))
+    async def ask_handler(message: Message, command: CommandObject | None = None) -> None:
+        # `command` is injected by the Command filter only; the "!ask" route has none.
+        if command is not None:
+            question = (command.args or "").strip()
+        else:
+            question = (message.text or "")[len("!ask "):].strip()
+
+        if not question:
+            await message.reply("Please provide a question after the command.")
+            return
+
         async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
-            text = message.text or ""
-            if text.startswith("!ask "):
-                question = text[5:].strip()
-            else:
-                parts = text.split(maxsplit=1)
-                question = parts[1].strip() if len(parts) > 1 else ""
-
-            if not question:
-                await message.reply("Please provide a question after the command.")
-                return
-
             try:
-                # 1. Analyze the query to see what context is needed
+                # 1. Decide locally which extra context the question needs.
                 analysis = await summarizer.analyze_query(question)
 
                 history_text = None
-                if analysis.get("need_history"):
+                if analysis["need_history"]:
                     recent_msgs = store.get_recent_messages(message.chat.id, settings.summary_max_messages)
                     if recent_msgs:
                         history_text = "\n".join(f"{m.author}: {m.text}" for m in recent_msgs)
 
                 search_results = None
-                search_query = analysis.get("search_query")
-                if analysis.get("need_search") and isinstance(search_query, str):
-                    search_results = await _perform_web_search(search_query)
+                if analysis["need_search"] and analysis["search_query"]:
+                    search_results = await _perform_web_search(analysis["search_query"])
 
-                # 2. Get the final answer
+                # 2. Get the final answer.
                 answer = await summarizer.answer_question(
                     prompt=question,
                     history=history_text,
-                    search_results=search_results
+                    search_results=search_results,
                 )
                 await _send_rich(message, answer)
             except LLMUnavailableError:
@@ -209,10 +200,10 @@ def build_router(store: MessageStore, summarizer: Summarizer, settings: Settings
                 logger.exception("Ask request failed for chat %s", message.chat.id)
                 await message.reply("I had trouble processing that question.")
 
-    @local_router.message(F.text & ~F.text.startswith("/"))
+    @router.message(F.text & ~F.text.startswith("/"))
     async def store_message(message: Message) -> None:
         author = message.from_user.full_name if message.from_user else "Unknown"
         store.add_message(message.chat.id, ChatMessage(author=author, text=message.text or ""))
         logger.debug("Stored message in chat %s", message.chat.id)
 
-    return local_router
+    return router

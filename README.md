@@ -32,7 +32,7 @@ python -m summarizer_bot.main
 
 - `/start` - short intro
 - `/help` - usage notes
-- `/summary 10` - summarize the last 10 stored text messages
+- `/summary N` - summarize the last N stored text messages (default 10, capped by `SUMMARY_MAX_MESSAGES`)
 - `/ask <question>` or `!ask <question>` - Ask the bot any question. The bot uses local rules to decide whether it needs recent chat history or a DuckDuckGo search before answering.
 
 ## Configuration
@@ -68,6 +68,8 @@ pipeline was removed, since the Telegram client now renders math and code direct
 ## Notes
 
 - Message history is stored in memory only. Restarting the process clears recent chat context.
+- In group chats, disable Bot API privacy mode via BotFather (`/setprivacy`), otherwise the bot only receives commands and cannot collect messages for `/summary` or handle `!ask`.
+- Service replies (`/start`, `/help`, error messages) are sent as plain text without a parse mode, so they can safely contain characters like `<` and `>`.
 - While a command is being processed, the bot shows Telegram's "typing" status until it sends the response.
 - The LLM client is intentionally OpenAI-compatible so you can point it at OpenAI or another compatible provider.
 - The `/ask` command uses local rules for history/search routing, so it does not spend an extra LLM call just to decide whether context is needed.

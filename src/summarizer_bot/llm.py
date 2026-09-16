@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import re
 import logging
+import re
 from typing import TypedDict
 
 from openai import APIConnectionError, APIError, AsyncOpenAI, NotFoundError, RateLimitError
@@ -13,6 +13,7 @@ class QueryAnalysis(TypedDict):
     need_search: bool
     search_query: str | None
     need_history: bool
+
 
 _HISTORY_PATTERNS = (
     re.compile(
@@ -31,6 +32,27 @@ _SEARCH_PATTERNS = (
         r"что нового|изменилось ли|проверь|посмотри|найди|поиск|интернет|в сети|в интернете|web|online)\b",
         re.IGNORECASE,
     ),
+)
+
+_SUMMARY_SYSTEM_PROMPT = (
+    "You summarize Telegram conversations clearly, briefly, and accurately. "
+    "Format the summary in standard Markdown (bullet lists, **bold** for key points); "
+    "Telegram renders it natively."
+)
+
+_ANSWER_SYSTEM_PROMPT = (
+    "You are a helpful and intelligent Telegram bot. "
+    "IMPORTANT: Answer clearly, directly, and concisely. DO NOT output long, verbose, or exhaustive encyclopedic text. "
+    "Avoid information noise; provide only the essential facts. "
+    "Always reply in the same language the user asked the question in. "
+    "Format your reply in standard Markdown, which Telegram renders natively. You may use: "
+    "**bold**, *italic*, ~~strikethrough~~, `inline code`, bullet and numbered lists, > blockquotes, "
+    "# headings, GitHub-style tables, and fenced code blocks with a language tag (e.g. ```python\\ncode\\n```). "
+    "For mathematics, use LaTeX with dollar delimiters ONLY: inline math as $...$ and display formulas as $$...$$. "
+    "NEVER use \\( \\) or \\[ \\] delimiters — Telegram does not render them. "
+    "Apply formatting only where it genuinely improves readability; for a short answer, plain sentences are best — "
+    "do not add headings or tables to a one-line reply. "
+    "If you use search results, briefly list the sources at the bottom."
 )
 
 
@@ -66,7 +88,8 @@ class LLMClient:
             raise ValueError("At least one model must be configured")
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0, timeout=30.0)
 
-    async def summarize(self, prompt: str, temperature: float = 0.2) -> str:
+    async def _complete(self, system_prompt: str, user_prompt: str, temperature: float) -> str:
+        """Run a chat completion, walking the model chain until one returns content."""
         last_error: Exception | None = None
 
         for index, model in enumerate(self._models):
@@ -75,31 +98,31 @@ class LLMClient:
                     model=model,
                     temperature=temperature,
                     messages=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "You summarize Telegram conversations clearly, briefly, and accurately. "
-                                "Format the summary in standard Markdown (bullet lists, **bold** for key points); "
-                                "Telegram renders it natively."
-                            ),
-                        },
-                        {"role": "user", "content": prompt},
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
                     ],
                 )
-                content = (response.choices[0].message.content or "").strip()
-                if content:
-                    if index > 0:
-                        logger.warning("Used fallback model '%s' for summary generation", model)
-                    return content
-                last_error = RuntimeError(f"Model '{model}' returned empty content")
             except NotFoundError as error:
                 last_error = error
                 logger.warning("Model '%s' is unavailable on provider; trying next fallback", model)
+                continue
             except (APIConnectionError, RateLimitError, APIError) as error:
                 last_error = error
-                logger.warning("Model '%s' failed with provider error; trying next fallback", model)
+                logger.warning("Model '%s' failed with provider error (%s); trying next fallback", model, error)
+                continue
 
-        raise LLMUnavailableError("No available models could generate a summary") from last_error
+            content = (response.choices[0].message.content or "").strip()
+            if content:
+                if index > 0:
+                    logger.warning("Used fallback model '%s'", model)
+                return content
+            last_error = RuntimeError(f"Model '{model}' returned empty content")
+            logger.warning("Model '%s' returned empty content; trying next fallback", model)
+
+        raise LLMUnavailableError("No configured model could produce a response") from last_error
+
+    async def summarize(self, prompt: str, temperature: float = 0.2) -> str:
+        return await self._complete(_SUMMARY_SYSTEM_PROMPT, prompt, temperature)
 
     async def analyze_query(self, prompt: str) -> QueryAnalysis:
         """Classify a question locally to avoid a second LLM round-trip."""
@@ -108,42 +131,11 @@ class LLMClient:
     async def answer_question(
         self, prompt: str, history: str | None = None, search_results: str | None = None
     ) -> str:
-        """Answers the user's question using optional context."""
-        system_content = (
-            "You are a helpful and intelligent Telegram bot. "
-            "IMPORTANT: Answer clearly, directly, and concisely. DO NOT output long, verbose, or exhaustive encyclopedic text. "
-            "Avoid information noise; provide only the essential facts. "
-            "Always reply in the same language the user asked the question in. "
-            "Format your reply in standard Markdown, which Telegram renders natively. You may use: "
-            "**bold**, *italic*, ~~strikethrough~~, `inline code`, bullet and numbered lists, > blockquotes, "
-            "# headings, GitHub-style tables, and fenced code blocks with a language tag (e.g. ```python\\ncode\\n```). "
-            "For mathematics, use LaTeX with dollar delimiters ONLY: inline math as $...$ and display formulas as $$...$$. "
-            "NEVER use \\( \\) or \\[ \\] delimiters — Telegram does not render them. "
-            "Apply formatting only where it genuinely improves readability; for a short answer, plain sentences are best — "
-            "do not add headings or tables to a one-line reply. "
-            "If you use search results, briefly list the sources at the bottom."
-        )
+        """Answer the user's question using optional chat history and search context."""
+        system_content = _ANSWER_SYSTEM_PROMPT
         if history:
             system_content += f"\n\nRecent chat history for context:\n{history}\n"
         if search_results:
             system_content += f"\n\nSearch results from the web to help answer the question:\n{search_results}\n"
 
-        last_error: Exception | None = None
-        for index, model in enumerate(self._models):
-            try:
-                response = await self._client.chat.completions.create(
-                    model=model,
-                    temperature=0.6,
-                    messages=[
-                        {"role": "system", "content": system_content},
-                        {"role": "user", "content": prompt},
-                    ],
-                )
-                content = (response.choices[0].message.content or "").strip()
-                if content:
-                    return content
-                last_error = RuntimeError(f"Model '{model}' returned empty content")
-            except Exception as e:
-                last_error = e
-                continue
-        raise LLMUnavailableError("No available models could answer the question") from last_error
+        return await self._complete(system_content, prompt, temperature=0.6)

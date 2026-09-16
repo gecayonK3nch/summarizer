@@ -4,8 +4,6 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
 from aiogram.types import BotCommand
 
 from .config import Settings
@@ -18,10 +16,10 @@ from .summarizer import Summarizer
 async def run() -> None:
     logging.basicConfig(level=logging.INFO)
     settings = Settings()  # pyright: ignore[reportCallIssue]
-    bot = Bot(
-        token=settings.telegram_bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
+    # No default parse_mode on purpose: service replies are plain text (and may
+    # legitimately contain "<" / ">"), while model output is delivered through
+    # rich messages, which carry their own Markdown.
+    bot = Bot(token=settings.telegram_bot_token)
     dispatcher = Dispatcher()
     store = MessageStore()
     llm_client = LLMClient(
@@ -38,6 +36,7 @@ async def run() -> None:
             BotCommand(command="start", description="Start the bot"),
             BotCommand(command="help", description="Show help"),
             BotCommand(command="summary", description="Summarize recent messages"),
+            BotCommand(command="ask", description="Ask a question (with optional web search)"),
         ]
     )
 

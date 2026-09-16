@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from typing import Deque
 
 from .models import ChatMessage
 
@@ -9,7 +8,7 @@ from .models import ChatMessage
 class MessageStore:
     def __init__(self, max_messages_per_chat: int = 200) -> None:
         self._max_messages_per_chat = max_messages_per_chat
-        self._messages: dict[int, Deque[ChatMessage]] = defaultdict(
+        self._messages: dict[int, deque[ChatMessage]] = defaultdict(
             lambda: deque(maxlen=self._max_messages_per_chat)
         )
 
